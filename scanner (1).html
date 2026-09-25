@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html>
+<head>
+<base target="_top">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<style>
+  :root{--ink:#1c1410;--card:#2a201a;--line:#3d3029;--turmeric:#f2b134;--txt:#fbf3e6;--mute:#b9a795;
+        --veg:#1f8a4c;--nonveg:#b4531a;--used:#b3261e;--unk:#5b6470}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;background:var(--ink);color:var(--txt);font:16px/1.4 system-ui,Roboto,sans-serif}
+  body{display:flex;flex-direction:column;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+  header{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;gap:10px}
+  h1{margin:0;font-size:18px;font-weight:700;letter-spacing:.2px;flex:1}
+  #count{background:var(--turmeric);color:var(--ink);font-weight:700;border-radius:999px;padding:6px 14px;font-size:15px;white-space:nowrap}
+  #gear{background:none;border:0;color:var(--mute);font-size:20px;min-height:auto;padding:4px 8px}
+  #reader{width:100%;aspect-ratio:1;background:#000;overflow:hidden;position:relative}
+  #reader video{width:100%!important;height:100%!important;object-fit:cover}
+  #camMsg{position:absolute;inset:0;display:flex;flex-direction:column;gap:12px;align-items:center;justify-content:center;
+          text-align:center;padding:24px;background:#000;z-index:2}
+  button{font:inherit;font-weight:600;border:0;border-radius:12px;min-height:52px;padding:0 18px;color:var(--txt);background:var(--card)}
+  button.p{background:var(--turmeric);color:var(--ink)}
+  button[disabled]{opacity:.5}
+  .bar{display:flex;gap:10px;padding:12px 16px}
+  .bar button{flex:1}
+  #manual{display:none;gap:10px;padding:0 16px 12px}
+  #manual input{flex:1;min-width:0;height:52px;border-radius:12px;border:1px solid var(--line);background:var(--card);color:var(--txt);padding:0 14px;font:inherit}
+  #log{flex:1;overflow-y:auto;padding:0 16px 16px}
+  .row{display:flex;justify-content:space-between;gap:10px;padding:12px 0;border-top:1px solid var(--line)}
+  .row b{display:block}.row small{color:var(--mute)}
+  .tag{align-self:center;border-radius:8px;padding:4px 10px;font-weight:700;font-size:14px;white-space:nowrap}
+  .empty{color:var(--mute);text-align:center;padding:24px 0}
+  #res{position:fixed;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;text-align:center;
+       padding:24px;z-index:9}
+  #res .ic{font-size:96px;line-height:1}
+  #res .big{font-size:44px;font-weight:800;margin:8px 0}
+  #res .who{font-size:22px}#res .sub{opacity:.85;margin-top:6px}
+  #res .acts{position:absolute;left:16px;right:16px;bottom:calc(20px + env(safe-area-inset-bottom));display:flex;gap:10px}
+  #res button{flex:1;background:rgba(0,0,0,.28)}
+  #res button.n{background:#fff;color:#111}
+  #setup{position:fixed;inset:0;display:none;flex-direction:column;gap:14px;justify-content:center;
+         padding:24px;z-index:10;background:var(--ink)}
+  #setup h2{margin:0 0 4px}
+  #setup p{color:var(--mute);margin:0 0 8px;font-size:14px}
+  #setup label{font-size:13px;color:var(--mute);margin-bottom:4px;display:block}
+  #setup input{width:100%;height:52px;border-radius:12px;border:1px solid var(--line);background:var(--card);
+               color:var(--txt);padding:0 14px;font:inherit;margin-bottom:14px}
+  #setupErr{color:#ff9a8a;font-size:14px;min-height:20px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Agomoni Scanner</h1>
+  <div id="count">– / –</div>
+  <button id="gear" onclick="openSetup()" title="Configure this year's event">⚙</button>
+</header>
+
+<div id="reader"><div id="camMsg"><div id="camTxt">Tap to scan coupons</div><button class="p" id="startBtn" onclick="startCam()">Start camera</button></div>
+  <div id="camStatus" style="position:absolute;top:8px;left:8px;right:8px;font-size:12px;color:#8f8f8f;z-index:3;pointer-events:none"></div>
+</div>
+<div class="bar">
+  <button id="torch" onclick="toggleTorch()" style="display:none">Torch</button>
+  <button onclick="$('manual').style.display=$('manual').style.display==='flex'?'none':'flex'">Type ID</button>
+</div>
+<div id="manual"><input id="mid" placeholder="e.g. 5511no.2" autocapitalize="off" autocomplete="off">
+  <button class="p" onclick="submitManual()">Verify</button></div>
+<div id="log"><div class="empty">Scanned coupons appear here.</div></div>
+
+<div id="res">
+  <div class="ic"></div><div class="big"></div><div class="who"></div><div class="sub"></div>
+  <div class="acts"><button id="undo" onclick="undo()">Undo scan</button><button class="n" onclick="closeRes()">Next</button></div>
+</div>
+
+<div id="setup">
+  <h2>Set up this year's event</h2>
+  <p>Paste the Apps Script URL and key for the current Form/Sheet. This is saved on this device only — do it once per phone, or open the year's share link and it fills in automatically.</p>
+  <div>
+    <label for="cfgUrl">Apps Script /exec URL</label>
+    <input id="cfgUrl" placeholder="https://script.google.com/.../exec" autocapitalize="off" autocomplete="off">
+    <label for="cfgKey">API key</label>
+    <input id="cfgKey" placeholder="the API_KEY value from qr_code_scan.gs" autocapitalize="off" autocomplete="off">
+  </div>
+  <div id="setupErr"></div>
+  <button class="p" onclick="saveSetup()">Save and continue</button>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+// --- Per-year config: read once from the share link (?api=...&key=...), then remember it on
+// this device via localStorage. The HTML file itself never needs editing between years — only
+// the link given out to volunteers changes. The gear icon reopens this screen to reconfigure.
+const STORE_URL = 'agomoni_api_url', STORE_KEY = 'agomoni_api_key';
+let API_URL = '', API_KEY = '';
+
+function loadConfig(){
+  const q = new URLSearchParams(location.search);
+  const qUrl = q.get('api'), qKey = q.get('key');
+  if(qUrl && qKey){
+    localStorage.setItem(STORE_URL, qUrl);
+    localStorage.setItem(STORE_KEY, qKey);
+    history.replaceState(null, '', location.pathname);   // scrub the key out of the visible URL/history
+  }
+  API_URL = localStorage.getItem(STORE_URL) || '';
+  API_KEY = localStorage.getItem(STORE_KEY) || '';
+  return !!(API_URL && API_KEY);
+}
+
+function openSetup(){
+  $('cfgUrl').value = API_URL;
+  $('cfgKey').value = API_KEY;
+  $('setupErr').textContent = '';
+  $('setup').style.display = 'flex';
+}
+
+async function saveSetup(){
+  const url = $('cfgUrl').value.trim(), key = $('cfgKey').value.trim();
+  if(!url || !key){ $('setupErr').textContent = 'Both fields are required.'; return; }
+  if(!/^https:\/\/script\.google\.com\/.*\/exec$/.test(url)){ $('setupErr').textContent = 'That doesn\'t look like an Apps Script /exec URL.'; return; }
+  $('setupErr').textContent = 'Checking…';
+  localStorage.setItem(STORE_URL, url); localStorage.setItem(STORE_KEY, key);
+  API_URL = url; API_KEY = key;
+  try{
+    const c = await api('counts');
+    if(c && c.status === 'error') throw new Error(c.msg || 'Rejected');
+    $('count').textContent = `${c.scanned} / ${c.total}`;
+    $('setup').style.display = 'none';
+  }catch(e){
+    $('setupErr').textContent = 'Saved, but the server didn\'t respond correctly (' + e.message + '). Check the URL/key and that the deployment allows "Anyone".';
+  }
+}
+
+async function api(action, params){
+  const q = new URLSearchParams(Object.assign({action, key: API_KEY}, params || {}));
+  const res = await fetch(API_URL + '?' + q.toString());
+  if(!res.ok) throw new Error('Server error ' + res.status);
+  return res.json();
+}
+
+const THEME = {veg:['✓','VEG','--veg'], nonveg:['✓','NON-VEG','--nonveg'], used:['✕','ALREADY USED','--used'],
+               unknown:['?','NOT FOUND','--unk'], error:['!','TRY AGAIN','--unk']};
+let qr, busy = false, lastCode = '', lastAt = 0, torchOn = false, closeTimer, current = null;
+
+function beep(ok){
+  try{ const c = new (window.AudioContext||window.webkitAudioContext)(), o = c.createOscillator(), g = c.createGain();
+    o.connect(g); g.connect(c.destination); o.frequency.value = ok ? 880 : 220; g.gain.value = .15;
+    o.start(); o.stop(c.currentTime + (ok ? .12 : .4)); }catch(e){}
+}
+
+function dbg(s){ const el = $('camStatus'); if(el) el.textContent = s; console.log('[scanner]', s); }
+
+async function startCam(){
+  $('camMsg').style.display = 'flex';
+  $('camTxt').textContent = 'Requesting camera…';
+  dbg('checking environment…');
+
+  if (!window.isSecureContext) { fail('Page is not HTTPS/secure — camera is blocked. (isSecureContext=false)'); return; }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { fail('This browser has no camera API (navigator.mediaDevices missing). Try Chrome.'); return; }
+
+  let watchdog = setTimeout(() => {
+    fail('Camera request is stuck after 8s with no browser prompt. This usually means camera was already denied for this site — open the site info / lock icon next to the address bar, set Camera to Allow, then reload the page and tap Start again.');
+  }, 8000);
+
+  try{
+    dbg('calling getUserMedia…');
+    const probe = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+    probe.getTracks().forEach(t => t.stop());
+    dbg('permission granted, starting scanner…');
+
+    qr = qr || new Html5Qrcode('reader', {formatsToSupport:[Html5QrcodeSupportedFormats.QR_CODE]});
+    await qr.start({facingMode:'environment'},
+      {fps:12, aspectRatio:1, qrbox:(w,h)=>{const s=Math.floor(Math.min(w,h)*.75);return {width:s,height:s};}},
+      onScan, ()=>{});
+    clearTimeout(watchdog);
+    $('camMsg').style.display = 'none';
+    dbg('');
+    try{ if(qr.getRunningTrackCapabilities().torch) $('torch').style.display = ''; }catch(e){}
+  }catch(e){
+    clearTimeout(watchdog);
+    fail((e && e.name ? e.name + ': ' : '') + (e && e.message ? e.message : e));
+  }
+}
+function fail(msg){
+  $('camTxt').textContent = msg;
+  $('camMsg').style.display = 'flex';
+  dbg('');
+}
+async function toggleTorch(){
+  try{ torchOn = !torchOn; await qr.applyVideoConstraints({advanced:[{torch:torchOn}]});
+       $('torch').textContent = torchOn ? 'Torch on' : 'Torch'; }catch(e){}
+}
+
+function onScan(text){
+  const now = Date.now();
+  if(busy || (text === lastCode && now - lastAt < 4000)) return;
+  verify(text);
+}
+function submitManual(){ const v = $('mid').value.trim(); if(v && !busy){ verify(v); $('mid').value = ''; } }
+
+function verify(code){
+  busy = true; lastCode = code; lastAt = Date.now();
+  api('verify', {code})
+    .then(r => show(code, r))
+    .catch(() => show(code, {status:'error', msg:'Server not reachable. Scan again.'}));
+}
+
+function show(code, r){
+  current = {code, r};
+  const key = r.status === 'ok' ? (r.veg ? 'veg' : 'nonveg') : r.status;
+  const t = THEME[key] || THEME.error, el = $('res');
+  el.style.background = `var(${t[2]})`;
+  el.querySelector('.ic').textContent = t[0];
+  el.querySelector('.big').textContent = t[1];
+  el.querySelector('.who').textContent = r.name ? `${r.name} · ${r.batch || ''}` : '';
+  el.querySelector('.sub').textContent = r.msg || '';
+  $('undo').style.display = r.status === 'ok' ? '' : 'none';
+  el.style.display = 'flex';
+  if(r.counts) $('count').textContent = `${r.counts.scanned} / ${r.counts.total}`;
+  beep(r.status === 'ok'); if(navigator.vibrate) navigator.vibrate(r.status === 'ok' ? 80 : [200,80,200]);
+  addLog(key, t[1], r, code);
+  clearTimeout(closeTimer);
+  if(r.status === 'ok') closeTimer = setTimeout(closeRes, 2500);
+}
+function closeRes(){ clearTimeout(closeTimer); $('res').style.display = 'none'; busy = false; lastAt = Date.now(); }
+
+function undo(){
+  const c = current.code; clearTimeout(closeTimer);
+  api('undo', {code: c}).then(r => { if(r && r.counts) $('count').textContent = `${r.counts.scanned} / ${r.counts.total}`;
+    lastCode = ''; closeRes(); }).catch(() => closeRes());
+}
+
+function addLog(key, label, r, code){
+  const log = $('log'); if(log.querySelector('.empty')) log.innerHTML = '';
+  const col = `var(${(THEME[key]||THEME.error)[2]})`, d = document.createElement('div');
+  d.className = 'row';
+  d.innerHTML = `<div><b></b><small></small></div><span class="tag" style="background:${col}"></span>`;
+  d.querySelector('b').textContent = r.name || code;
+  d.querySelector('small').textContent = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) + (r.name ? ' · ' + code : '');
+  d.querySelector('.tag').textContent = label;
+  log.prepend(d); while(log.children.length > 25) log.lastChild.remove();
+}
+
+window.onload = () => {
+  if(loadConfig()){
+    api('counts').then(c => $('count').textContent = `${c.scanned} / ${c.total}`).catch(()=>{});
+  } else {
+    openSetup();
+  }
+};
+</script>
+</body>
+</html>
