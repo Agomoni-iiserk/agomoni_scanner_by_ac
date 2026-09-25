@@ -55,8 +55,12 @@
   <button id="gear" onclick="openSetup()" title="Configure this year's event">⚙</button>
 </header>
 
-<div id="reader"><div id="camMsg"><div id="camTxt">Tap to scan coupons</div><button class="p" id="startBtn" onclick="startCam()">Start camera</button></div>
+<div id="reader"><div id="camMsg"><div id="camTxt">Tap "Start camera" below to scan coupons</div></div>
   <div id="camStatus" style="position:absolute;top:8px;left:8px;right:8px;font-size:12px;color:#8f8f8f;z-index:3;pointer-events:none"></div>
+</div>
+<div class="bar">
+  <button class="p" id="toggleCam" onclick="toggleCamera()">Start camera</button>
+  <button id="undoLast" onclick="undoLast()" disabled>Undo last scan</button>
 </div>
 <div class="bar">
   <button id="torch" onclick="toggleTorch()" style="display:none">Torch</button>
@@ -139,7 +143,7 @@ async function api(action, params){
 
 const THEME = {veg:['✓','VEG','--veg'], nonveg:['✓','NON-VEG','--nonveg'], used:['✕','ALREADY USED','--used'],
                unknown:['?','NOT FOUND','--unk'], error:['!','TRY AGAIN','--unk']};
-let qr, busy = false, lastCode = '', lastAt = 0, torchOn = false, closeTimer, current = null;
+let qr, busy = false, lastCode = '', lastAt = 0, torchOn = false, closeTimer, current = null, lastSuccess = null;
 
 function beep(ok){
   try{ const c = new (window.AudioContext||window.webkitAudioContext)(), o = c.createOscillator(), g = c.createGain();
@@ -148,6 +152,25 @@ function beep(ok){
 }
 
 function dbg(s){ const el = $('camStatus'); if(el) el.textContent = s; console.log('[scanner]', s); }
+
+let scanning = false, camBusy = false;
+
+async function toggleCamera(){
+  if(camBusy) return;
+  camBusy = true;
+  try{ if(scanning) await stopCam(); else await startCam(); }
+  finally{ camBusy = false; }
+}
+
+async function stopCam(){
+  if(qr){ try{ await qr.stop(); }catch(e){} try{ qr.clear(); }catch(e){} qr = null; }
+  scanning = false;
+  $('toggleCam').textContent = 'Start camera';
+  $('torch').style.display = 'none'; torchOn = false;
+  $('camTxt').textContent = 'Camera stopped. Tap "Start camera" below to resume.';
+  $('camMsg').style.display = 'flex';
+  dbg('');
+}
 
 async function startCam(){
   $('camMsg').style.display = 'flex';
@@ -174,6 +197,8 @@ async function startCam(){
     clearTimeout(watchdog);
     $('camMsg').style.display = 'none';
     dbg('');
+    scanning = true;
+    $('toggleCam').textContent = 'Stop camera';
     try{ if(qr.getRunningTrackCapabilities().torch) $('torch').style.display = ''; }catch(e){}
   }catch(e){
     clearTimeout(watchdog);
@@ -214,6 +239,7 @@ function show(code, r){
   el.querySelector('.who').textContent = r.name ? `${r.name} · ${r.batch || ''}` : '';
   el.querySelector('.sub').textContent = r.msg || '';
   $('undo').style.display = r.status === 'ok' ? '' : 'none';
+  if(r.status === 'ok'){ lastSuccess = { code, name: r.name, batch: r.batch }; $('undoLast').disabled = false; }
   el.style.display = 'flex';
   if(r.counts) $('count').textContent = `${r.counts.scanned} / ${r.counts.total}`;
   beep(r.status === 'ok'); if(navigator.vibrate) navigator.vibrate(r.status === 'ok' ? 80 : [200,80,200]);
@@ -226,7 +252,20 @@ function closeRes(){ clearTimeout(closeTimer); $('res').style.display = 'none'; 
 function undo(){
   const c = current.code; clearTimeout(closeTimer);
   api('undo', {code: c}).then(r => { if(r && r.counts) $('count').textContent = `${r.counts.scanned} / ${r.counts.total}`;
+    if(lastSuccess && lastSuccess.code === c){ lastSuccess = null; $('undoLast').disabled = true; }
     lastCode = ''; closeRes(); }).catch(() => closeRes());
+}
+
+function undoLast(){
+  if(!lastSuccess) return;
+  const {code, name} = lastSuccess;
+  $('undoLast').disabled = true;
+  api('undo', {code}).then(r => {
+    if(r && r.counts) $('count').textContent = `${r.counts.scanned} / ${r.counts.total}`;
+    addLog('unk', 'UNDONE', {name}, code);
+    if(lastCode === code) lastCode = '';
+    lastSuccess = null;
+  }).catch(() => { $('undoLast').disabled = false; });
 }
 
 function addLog(key, label, r, code){
