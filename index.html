@@ -38,6 +38,9 @@
   #res .acts{position:absolute;left:16px;right:16px;bottom:calc(20px + env(safe-area-inset-bottom));display:flex;gap:10px}
   #res button{flex:1;background:rgba(0,0,0,.28)}
   #res button.n{background:#fff;color:#111}
+  .spin{width:60px;height:60px;border:6px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;
+        animation:spin .8s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
   #setup{position:fixed;inset:0;display:none;flex-direction:column;gap:14px;justify-content:center;
          padding:24px;z-index:10;background:var(--ink)}
   #setup h2{margin:0 0 4px}
@@ -134,15 +137,26 @@ async function saveSetup(){
   }
 }
 
-async function api(action, params){
+async function apiOnce(action, params, timeoutMs){
   const q = new URLSearchParams(Object.assign({action, key: API_KEY}, params || {}));
-  const res = await fetch(API_URL + '?' + q.toString());
-  if(!res.ok) throw new Error('Server error ' + res.status);
-  return res.json();
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs || 8000);
+  try{
+    const res = await fetch(API_URL + '?' + q.toString(), {signal: ctrl.signal});
+    if(!res.ok) throw new Error('Server error ' + res.status);
+    return await res.json();
+  } finally { clearTimeout(t); }
+}
+
+// verifyCoupon/undoScan are safe to call twice: a second call on an already-scanned coupon
+// just reports "already used" (the true state), rather than us guessing after a dropped response.
+async function api(action, params){
+  try{ return await apiOnce(action, params); }
+  catch(e){ return await apiOnce(action, params); }
 }
 
 const THEME = {veg:['✓','VEG','--veg'], nonveg:['✓','NON-VEG','--nonveg'], used:['✕','ALREADY USED','--used'],
-               unknown:['?','NOT FOUND','--unk'], error:['!','TRY AGAIN','--unk']};
+               unknown:['?','NOT FOUND','--unk'], busy:['⏳','SERVER BUSY — SCAN AGAIN','--unk'], error:['!','TRY AGAIN','--unk']};
 let qr, busy = false, lastCode = '', lastAt = 0, torchOn = false, closeTimer, current = null, lastSuccess = null;
 
 function beep(ok){
@@ -224,16 +238,32 @@ function submitManual(){ const v = $('mid').value.trim(); if(v && !busy){ verify
 
 function verify(code){
   busy = true; lastCode = code; lastAt = Date.now();
+  current = {code, r: null};
+  showPending(code, 'Verifying…');
   api('verify', {code})
     .then(r => show(code, r))
-    .catch(() => show(code, {status:'error', msg:'Server not reachable. Scan again.'}));
+    .catch(() => show(code, {status:'error', msg:'Server not reachable after two tries. Scan again.'}));
+}
+
+function showPending(code, label){
+  clearTimeout(closeTimer);
+  const el = $('res');
+  el.style.background = 'var(--unk)';
+  el.querySelector('.ic').innerHTML = '<div class="spin"></div>';
+  el.querySelector('.big').textContent = label;
+  el.querySelector('.who').textContent = '';
+  el.querySelector('.sub').textContent = code;
+  el.querySelector('.acts').style.display = 'none';
+  el.style.display = 'flex';
 }
 
 function show(code, r){
+  dbg('');
   current = {code, r};
   const key = r.status === 'ok' ? (r.veg ? 'veg' : 'nonveg') : r.status;
   const t = THEME[key] || THEME.error, el = $('res');
   el.style.background = `var(${t[2]})`;
+  el.querySelector('.acts').style.display = 'flex';
   el.querySelector('.ic').textContent = t[0];
   el.querySelector('.big').textContent = t[1];
   el.querySelector('.who').textContent = r.name ? `${r.name} · ${r.batch || ''}` : '';
@@ -250,7 +280,12 @@ function show(code, r){
 function closeRes(){ clearTimeout(closeTimer); $('res').style.display = 'none'; busy = false; lastAt = Date.now(); }
 
 function undo(){
-  const c = current.code; clearTimeout(closeTimer);
+  // Guards against tapping "Undo scan" just as (or after) this same popup auto-closed on its own —
+  // that stale tap used to be able to fire while the camera had already moved on to a new scan.
+  if(!current || $('res').style.display !== 'flex') return;
+  const c = current.code;
+  busy = true;
+  showPending(c, 'Undoing…');
   api('undo', {code: c}).then(r => { if(r && r.counts) $('count').textContent = `${r.counts.scanned} / ${r.counts.total}`;
     if(lastSuccess && lastSuccess.code === c){ lastSuccess = null; $('undoLast').disabled = true; }
     lastCode = ''; closeRes(); }).catch(() => closeRes());
@@ -260,12 +295,16 @@ function undoLast(){
   if(!lastSuccess) return;
   const {code, name} = lastSuccess;
   $('undoLast').disabled = true;
+  $('undoLast').textContent = 'Undoing…';
   api('undo', {code}).then(r => {
     if(r && r.counts) $('count').textContent = `${r.counts.scanned} / ${r.counts.total}`;
     addLog('unk', 'UNDONE', {name}, code);
     if(lastCode === code) lastCode = '';
     lastSuccess = null;
-  }).catch(() => { $('undoLast').disabled = false; });
+  }).catch(() => {}).finally(() => {
+    $('undoLast').textContent = 'Undo last scan';
+    $('undoLast').disabled = !lastSuccess;
+  });
 }
 
 function addLog(key, label, r, code){
