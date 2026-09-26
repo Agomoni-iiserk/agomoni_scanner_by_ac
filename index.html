@@ -14,7 +14,8 @@
   h1{margin:0;font-size:18px;font-weight:700;letter-spacing:.2px;flex:1}
   #count{background:var(--turmeric);color:var(--ink);font-weight:700;border-radius:999px;padding:6px 14px;font-size:15px;white-space:nowrap}
   #gear{background:none;border:0;color:var(--mute);font-size:20px;min-height:auto;padding:4px 8px}
-  #reader{width:100%;aspect-ratio:1;background:#000;overflow:hidden;position:relative}
+  #readerWrap{width:100%;aspect-ratio:1;background:#000;overflow:hidden;position:relative}
+  #reader{width:100%;height:100%}
   #reader video{width:100%!important;height:100%!important;object-fit:cover}
   #camMsg{position:absolute;inset:0;display:flex;flex-direction:column;gap:12px;align-items:center;justify-content:center;
           text-align:center;padding:24px;background:#000;z-index:2}
@@ -58,7 +59,9 @@
   <button id="gear" onclick="openSetup()" title="Configure this year's event">⚙</button>
 </header>
 
-<div id="reader"><div id="camMsg"><div id="camTxt">Tap "Start camera" below to scan coupons</div></div>
+<div id="readerWrap">
+  <div id="reader"></div>
+  <div id="camMsg"><div id="camTxt">Tap "Start camera" below to scan coupons</div></div>
   <div id="camStatus" style="position:absolute;top:8px;left:8px;right:8px;font-size:12px;color:#8f8f8f;z-index:3;pointer-events:none"></div>
 </div>
 <div class="bar">
@@ -140,7 +143,7 @@ async function saveSetup(){
 async function apiOnce(action, params, timeoutMs){
   const q = new URLSearchParams(Object.assign({action, key: API_KEY}, params || {}));
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), timeoutMs || 8000);
+  const t = setTimeout(() => ctrl.abort(), timeoutMs || 15000);
   try{
     const res = await fetch(API_URL + '?' + q.toString(), {signal: ctrl.signal});
     if(!res.ok) throw new Error('Server error ' + res.status);
@@ -148,11 +151,9 @@ async function apiOnce(action, params, timeoutMs){
   } finally { clearTimeout(t); }
 }
 
-// verifyCoupon/undoScan are safe to call twice: a second call on an already-scanned coupon
-// just reports "already used" (the true state), rather than us guessing after a dropped response.
+// Plain single-attempt call for actions where a blind retry is harmless (undo, counts).
 async function api(action, params){
-  try{ return await apiOnce(action, params); }
-  catch(e){ return await apiOnce(action, params); }
+  return await apiOnce(action, params);
 }
 
 const THEME = {veg:['✓','VEG','--veg'], nonveg:['✓','NON-VEG','--nonveg'], used:['✕','ALREADY USED','--used'],
@@ -220,8 +221,8 @@ async function startCam(){
   }
 }
 function fail(msg){
-  $('camTxt').textContent = msg;
-  $('camMsg').style.display = 'flex';
+  const t = $('camTxt'); if(t) t.textContent = msg;
+  const m = $('camMsg'); if(m) m.style.display = 'flex';
   dbg('');
 }
 async function toggleTorch(){
@@ -236,13 +237,26 @@ function onScan(text){
 }
 function submitManual(){ const v = $('mid').value.trim(); if(v && !busy){ verify(v); $('mid').value = ''; } }
 
-function verify(code){
+async function verify(code){
   busy = true; lastCode = code; lastAt = Date.now();
   current = {code, r: null};
   showPending(code, 'Verifying…');
-  api('verify', {code})
-    .then(r => show(code, r))
-    .catch(() => show(code, {status:'error', msg:'Server not reachable after two tries. Scan again.'}));
+  let r;
+  try{
+    r = await apiOnce('verify', {code});
+  }catch(e1){
+    // The first attempt may well have already succeeded server-side even though its response
+    // never arrived — re-check the real state instead of just declaring failure.
+    try{
+      r = await apiOnce('verify', {code});
+      if(r && r.status === 'used'){
+        r = { status: 'ok', veg: r.veg, name: r.name, batch: r.batch, counts: r.counts, msg: 'Recorded (first reply was just slow to arrive).' };
+      }
+    }catch(e2){
+      r = {status:'error', msg:'Server not reachable after two tries. Scan again.'};
+    }
+  }
+  show(code, r);
 }
 
 function showPending(code, label){
