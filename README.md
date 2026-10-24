@@ -1,1 +1,1 @@
-Go to thi link https://github.com/Ayush-Chandra-107/Coupon-System-IISER-Kolkata for details.
+Go to the link https://github.com/Ayush-Chandra-107/Coupon-System-IISER-Kolkata for details.
